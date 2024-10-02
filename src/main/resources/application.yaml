@@ -1,0 +1,8 @@
+spring:
+  application:
+    name: gerador-sql
+
+logging:
+  level:
+    root: INFO
+    br.com.geradorsql: INFO # DEBUG
