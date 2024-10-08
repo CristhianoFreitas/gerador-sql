@@ -1,4 +1,4 @@
-package br.com.geradorsql.controller;
+package br.com.geradorsql.domain.service;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -16,20 +16,18 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import org.slf4j.Logger;
+import org.springframework.stereotype.Service;
 import org.springframework.util.StopWatch;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
 
-import br.com.geradorsql.model.Entrada;
+import br.com.geradorsql.domain.model.GerarSqlParametros;
+import br.com.geradorsql.domain.port.in.GerarSqlUseCase;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
-@RestController
-@RequestMapping(path = "/gerar-sql")
-public class GeradorSqlController {
-
-    private static final Logger log = org.slf4j.LoggerFactory.getLogger(GeradorSqlController.class);
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class GeradorSqlService implements GerarSqlUseCase {
 
     private static final String ASPAS_INICIO_FIM_REGEX = "^\"|\"$";
     private static final String CSV_SEPARADOR = ",";
@@ -41,13 +39,12 @@ public class GeradorSqlController {
     private static final String VALOR_SQL = "'%s'";
     private static final String CAMPO_VALOR_SQL = "%s = %s";
 
-    @PostMapping()
-    public void gerarSql(@RequestBody Entrada entrada) {
+    public void gerarSql(GerarSqlParametros parametros) {
         StopWatch sw = new StopWatch();
 
         log.info("Iniciando execução.");
 
-        var arquivoCsv = Paths.get(entrada.getDadosCsv());
+        var arquivoCsv = Paths.get(parametros.getDadosCsv());
 
         if (Files.notExists(arquivoCsv)) {
             throw new RuntimeException("O arquivo csv não foi encontrado.");
@@ -61,7 +58,7 @@ public class GeradorSqlController {
         var primeiraLinhaCsv = linhasStream.stream().findFirst().orElseThrow(() -> new RuntimeException("Arquivo .csv vazio."));
         var cabecalho =
             Stream.of(primeiraLinhaCsv.split(CSV_SEPARADOR)).map(valor -> valor.replaceAll(ASPAS_INICIO_FIM_REGEX, "")).toList();
-        processarConfiguracoes(entrada, cabecalho);
+        processarConfiguracoes(parametros, cabecalho);
         sw.stop();
 
         // mapa na qual a chave: nome do arquivo e o valor: lista de comandos sql
@@ -69,7 +66,7 @@ public class GeradorSqlController {
 
         var conteudoCsv = linhasStream.stream().skip(1);
         sw.start("processarConteudoCsv");
-        processarConteudoCsv(entrada, cabecalho, conteudoSaida, conteudoCsv);
+        processarConteudoCsv(parametros, cabecalho, conteudoSaida, conteudoCsv);
         sw.stop();
 
         sw.start("escreverArquivoSql");
@@ -102,7 +99,7 @@ public class GeradorSqlController {
     }
 
     // Função principal para gerar os comandos SQL
-    private void processarConteudoCsv(Entrada entrada, List<String> cabecalho, Map<String, List<String>> conteudoSaida,
+    private void processarConteudoCsv(GerarSqlParametros parametros, List<String> cabecalho, Map<String, List<String>> conteudoSaida,
         Stream<String> conteudoCsv) {
 
         AtomicInteger linhaAtual = new AtomicInteger();
@@ -118,7 +115,7 @@ public class GeradorSqlController {
             Map<String, String> valoresPorCampo =
                 IntStream.range(0, cabecalho.size()).boxed().collect(Collectors.toMap(cabecalho::get, valores::get));
 
-            entrada.getConfiguracoes().forEach(operacao -> {
+            parametros.getConfiguracoes().forEach(operacao -> {
 
                 if (UPDATE.equals(operacao.getOperacao())) {
 
@@ -130,7 +127,7 @@ public class GeradorSqlController {
                         .forEach((chave, valor) -> clausulas.add(String.format(CAMPO_VALOR_SQL, chave, String.format(VALOR_SQL, valor))));
                     String clausulasStr = String.join(SQL_SEPARADOR, clausulas);
                     String nomeDaChaveTabela = operacao.getChaveTabela();
-                    String valorDaChaveTabela = valoresPorCampo.get(entrada.getChaveCsv());
+                    String valorDaChaveTabela = valoresPorCampo.get(parametros.getChaveCsv());
 
                     String sql = String.format(UPDATE_SQL, operacao.getTabela(), clausulasStr, nomeDaChaveTabela, valorDaChaveTabela);
                     conteudoSaida.computeIfAbsent(operacao.getArquivoSaida(), v -> new ArrayList<>()).add(sql);
@@ -145,7 +142,7 @@ public class GeradorSqlController {
                     var colunasStr = String.join(SQL_SEPARADOR, colunasInsert);
 
                     List<String> valoresInsert = new ArrayList<>();
-                    valoresInsert.add(valoresPorCampo.get(entrada.getChaveCsv()));
+                    valoresInsert.add(valoresPorCampo.get(parametros.getChaveCsv()));
                     operacao.getCampos().forEach((campoTabela, campoCsv) -> valoresInsert.add(valoresPorCampo.get(campoCsv)));
                     operacao.getCamposFixos().forEach((chave, valor) -> valoresInsert.add(String.format(VALOR_SQL, valor)));
                     var valoresStr = String.join(SQL_SEPARADOR, valoresInsert);
@@ -160,16 +157,16 @@ public class GeradorSqlController {
     }
 
     // Função para pré-processar configurações
-    public void processarConfiguracoes(Entrada entrada, List<String> cabecalho) {
-        if (entrada.getConfiguracoes() == null) {
-            throw new RuntimeException("Não encontrada as 'configuracoes' na entrada.");
+    private void processarConfiguracoes(GerarSqlParametros parametros, List<String> cabecalho) {
+        if (parametros.getConfiguracoes() == null) {
+            throw new RuntimeException("Não encontrada as 'configuracoes' na parametros.");
         }
-        entrada.getConfiguracoes().forEach(configuracao -> {
+        parametros.getConfiguracoes().forEach(configuracao -> {
             if (!INSERT.equals(configuracao.getOperacao()) && !UPDATE.equals(configuracao.getOperacao())) {
                 throw new RuntimeException("Valor inválido para a variável 'operacao' na configuração. Use 'UPDATE' ou 'INSERT'.");
             }
             if (!configuracao.getCampos().values().stream().allMatch(cabecalho::contains)) {
-                throw new RuntimeException("A configuração de entrada possui um campo que não foi encontrado no arquivo .csv.");
+                throw new RuntimeException("A configuração de parametros possui um campo que não foi encontrado no arquivo .csv.");
             }
             if (configuracao.getCamposFixos() == null) {
                 configuracao.setCamposFixos(Collections.emptyMap());
@@ -178,7 +175,7 @@ public class GeradorSqlController {
     }
 
     // Função para ler o arquivo .csv
-    public List<String> lerArquivoCsv(Path arquivoCsv) {
+    private List<String> lerArquivoCsv(Path arquivoCsv) {
         log.info("Iniciando leitura do arquivo .csv");
         List<String> linhas = null;
         try (BufferedReader br = Files.newBufferedReader(arquivoCsv)) {
@@ -191,11 +188,12 @@ public class GeradorSqlController {
     }
 
     // Função que trata os valores nulos e remove espaços em branco e aspas duplas
-    public String prepararValores(String valor) {
+    private String prepararValores(String valor) {
         if (valor == null || "null".equals(valor)) {
             return "NULL";
         } else {
             return String.format(VALOR_SQL, valor.trim().replaceAll(ASPAS_INICIO_FIM_REGEX, ""));
         }
     }
+
 }
